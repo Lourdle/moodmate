@@ -1,0 +1,14 @@
+{
+  "name": "心晴 · 情绪日记与自我关怀",
+  "short_name": "心晴",
+  "description": "低门槛情绪记录、洞察与自助关怀工具",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#6c7cff",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

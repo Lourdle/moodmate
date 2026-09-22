@@ -68,19 +68,49 @@ const dayKey = ts => { const d = new Date(ts); return d.getFullYear() + '-' + (d
 const moodOf = v => MOODS.find(m => m.v === v) || MOODS[2];
 const esc = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hasSample = () => entries.some(e => e.sample);
+const HERO = {
+  5: 'linear-gradient(135deg,#fcb040,#ff9e6b 60%,#ffc5a0)',
+  4: 'linear-gradient(135deg,#5fbf8f,#7dd17a 60%,#a9e6b2)',
+  3: 'linear-gradient(135deg,#7d8aa0,#9aa7b0 60%,#c2cad6)',
+  2: 'linear-gradient(135deg,#6f8df0,#5a6fd8 60%,#92a6f6)',
+  1: 'linear-gradient(135deg,#a985f5,#8b6be0 60%,#c2a9f6)',
+};
+const heroStyle = v => HERO[v] || 'linear-gradient(135deg,#6c7cff,#9b8cff 55%,#ffb1c8)';
+const COMFORT = {
+  5: '太棒了！把这份快乐存进你的能量银行 🎉',
+  4: '平静是很好的状态，替今天的你记下了 🌿',
+  3: '普普通通的日子，也值得被认真记录 🍬',
+  2: '谢谢你愿意分享这份低落，慢慢来，你已经做得很好了 🫂',
+  1: '辛苦你了，此刻的感受很重要，我们一起照顾它 🫂',
+};
 
 let form = { mood: 0, intensity: 5, triggers: [], text: '' };
 let groundStep = -1;
 let currentNoise = null;
-let audioCtx = null, noiseNodes = null;
+let audioCtx = null, noiseNodes = null, windTimer = null;
 const main = document.getElementById('main');
 const themeBtn = document.getElementById('themeBtn');
-let toastEl = null, bTimer = null;
+let toastEl = null, bTimer = null, cloudFilter = null;
 
-function toast(msg) {
+function toast(msg, ms = 2200) {
   if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'toast'; document.body.appendChild(toastEl); }
   toastEl.textContent = msg; toastEl.classList.add('show');
-  clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+function celebrate(x, y, emoji) {
+  for (let i = 0; i < 7; i++) {
+    const s = document.createElement('span');
+    s.className = 'burst';
+    s.textContent = emoji;
+    s.style.left = (x - 10) + 'px';
+    s.style.top = (y - 10) + 'px';
+    s.style.setProperty('--dx', ((Math.random() - 0.5) * 180).toFixed(0) + 'px');
+    s.style.setProperty('--dy', (-(Math.random() * 90 + 40)).toFixed(0) + 'px');
+    s.style.setProperty('--rot', ((Math.random() - 0.5) * 160).toFixed(0) + 'deg');
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 1100);
+  }
 }
 
 function stats() {
@@ -180,7 +210,7 @@ function renderDiary() {
     <button class="primary" data-load-sample>✨ 载入示例数据，先看看效果</button>
     <button class="ghost" data-onboard-skip style="margin-top:10px">直接开始记录</button>
   </div>` : ''}
-  <div class="card hero">
+  <div class="card hero" style="background:${heroStyle(last ? last.mood : null)}">
     <div class="date">${now.getMonth() + 1}月${now.getDate()}日 · 星期${wd[now.getDay()]}</div>
     <div class="greet">${greet}，今天的你感觉如何？</div>
     <div class="mood-row">${MOODS.map(m => `<button class="mood-btn ${last && last.mood === m.v ? 'on' : ''}" data-mood="${m.v}"><span class="e">${m.e}</span>${m.n}</button>`).join('')}</div>
@@ -263,6 +293,32 @@ function triggerBars() {
   return list.map(([t, c]) => `<div class="bar-row"><span style="width:62px">${esc(t)}</span><div class="bar-track"><div class="bar-fill" style="width:${(c / max * 100).toFixed(1)}%;background:linear-gradient(90deg,#6c7cff,#9b8cff)"></div></div><span style="width:26px;text-align:right;color:var(--sub)">${c}</span></div>`).join('');
 }
 
+function timeHtml() {
+  const buckets = [['早晨 5–11点', 5, 12], ['下午 12–17点', 12, 18], ['晚上 18–23点', 18, 24], ['深夜 0–4点', 0, 5]];
+  const rows = buckets.map(([k, from, to]) => {
+    const vs = entries.filter(e => { const h = new Date(e.ts).getHours(); return h >= from && h < to; }).map(e => e.mood);
+    return { k, n: vs.length, avg: vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null };
+  });
+  const bars = rows.map(r => {
+    const pct = r.avg ? r.avg / 5 * 100 : 0;
+    const color = r.avg ? moodOf(Math.round(r.avg)).c : 'transparent';
+    return `<div class="bar-row"><span style="width:100px">${r.k}</span><div class="bar-track"><div class="bar-fill" style="width:${pct.toFixed(1)}%;background:${color}"></div></div><span style="width:42px;text-align:right;color:var(--sub)">${r.avg ? r.avg.toFixed(1) : '—'}</span></div>`;
+  }).join('');
+  const withData = rows.filter(r => r.n);
+  let extra = '';
+  if (withData.length >= 2) {
+    const lo = withData.reduce((a, b) => a.avg < b.avg ? a : b);
+    const hi = withData.reduce((a, b) => a.avg > b.avg ? a : b);
+    const short = k => k.split(' ')[0];
+    const why = lo.k.startsWith('早晨') ? '试试把重要的事往后挪，用轻量的起床仪式开启一天。' :
+      lo.k.startsWith('晚上') ? '夜晚容易反刍，睡前安排一次放松练习会更好睡。' :
+      lo.k.startsWith('深夜') ? '尽量别熬太晚，睡眠是情绪的燃料。' :
+      '午后疲惫很正常，短暂离开屏幕 10 分钟会有效。';
+    extra = `<p class="insight">你通常在「${short(hi.k)}」状态最好（${hi.avg.toFixed(1)}/5），在「${short(lo.k)}」相对低迷（${lo.avg.toFixed(1)}/5）。${why}</p>`;
+  }
+  return bars + extra;
+}
+
 function wordCloudHtml() {
   const counts = wordCounts();
   const list = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 18);
@@ -272,7 +328,7 @@ function wordCloudHtml() {
   const colors = ['#6c7cff', '#a985f5', '#7dd17a', '#fcb040', '#6f8df0', '#9be1c0', '#ff9eb5'];
   return `<div class="cloud">${list.map(([w, c], i) => {
     const size = range === 0 ? 22 : 14 + (c - min) / range * 26;
-    return `<span class="cloud-word" style="font-size:${size.toFixed(0)}px;color:${colors[i % colors.length]}" title="出现 ${c} 次">${esc(w)}</span>`;
+    return `<span class="cloud-word ${cloudFilter === w ? 'on' : ''}" data-word="${esc(w)}" style="font-size:${size.toFixed(0)}px;color:${colors[i % colors.length]}" title="出现 ${c} 次，点击查看相关记录">${esc(w)}</span>`;
   }).join('')}</div>`;
 }
 
@@ -326,6 +382,7 @@ function renderInsights() {
   if (s.streak >= 3) lines.push(`已连续记录 ${s.streak} 天，觉察是改变的起点，继续保持 ✨`);
   const wr = weeklyReport();
   const fmtDay = k => { const p = k.split('-'); return `${+p[1]}月${+p[2]}日`; };
+  const filterList = cloudFilter ? entries.filter(e => e.text && e.text.includes(cloudFilter)) : [];
   main.innerHTML = `
   ${hasSample() ? `<div class="card banner"><span>✨ 当前包含示例数据，体验后可一键清空</span><button class="ghost" id="clearSample" style="width:auto;padding:8px 14px;font-size:13px">清空示例</button></div>` : ''}
   <div class="grid3">
@@ -346,11 +403,21 @@ function renderInsights() {
     <p class="insight">${wr.story}</p>
   </div>
   <div class="card"><h2>🗓️ 近 30 天情绪日历</h2><p class="hint">颜色代表当日平均情绪，悬停查看详情</p>${heatmapHtml()}</div>
+  <div class="card"><h2>🕐 时段情绪</h2><p class="hint">一天中不同时段的平均情绪（1–5）</p>${timeHtml()}</div>
   <div class="card"><h2>近 7 天情绪趋势</h2><p class="hint">每天的平均情绪评分（1–5）</p>${trendChart()}</div>
   <div class="card"><h2>情绪分布</h2><p class="hint">每种情绪出现的次数</p>${moodBars()}</div>
   <div class="card"><h2>触发因素 TOP</h2><p class="hint">综合手动标签与日记文本识别</p>${triggerBars()}</div>
-  <div class="card"><h2>☁️ 日记高频词</h2><p class="hint">从你的文字里浮现的关键词</p>${wordCloudHtml()}</div>
-  <div class="card"><h2>给你的小洞察</h2>${lines.map(l => `<p class="insight">${l}</p>`).join('')}</div>`;
+  <div class="card"><h2>☁️ 日记高频词</h2><p class="hint">从你的文字里浮现的关键词，点击可查看相关记录</p>${wordCloudHtml()}</div>
+  ${cloudFilter ? `<div class="card"><h2>🔎 提到「${esc(cloudFilter)}」的记录</h2><p class="hint">共 ${filterList.length} 条</p>${filterList.slice(0, 8).map(entryHtml).join('')}<button class="ghost" data-word-clear style="margin-top:12px">收起筛选</button></div>` : ''}
+  <div class="card"><h2>给你的小洞察</h2>${lines.map(l => `<p class="insight">${l}</p>`).join('')}</div>
+  <div class="card">
+    <h2>🔐 数据与隐私</h2>
+    <p class="hint">所有数据仅保存在此浏览器本地（localStorage），绝不上传服务器；建议定期导出备份，以便换设备时恢复</p>
+    <div class="data-actions">
+      <button class="ghost" id="exportBtn">🗂️ 导出 JSON 备份</button>
+      <button class="ghost danger" id="clearAllBtn">清空全部数据</button>
+    </div>
+  </div>`;
 }
 
 function planFor(v) {
@@ -419,7 +486,7 @@ function renderCare() {
   const m = moodOf(v);
   const plan = planFor(v);
   main.innerHTML = `
-  <div class="card hero">
+  <div class="card hero" style="background:${heroStyle(v)}">
     <div class="date">今日关怀方案</div>
     <div class="greet">${plan.headline}</div>
     <div class="hero-meta">${last ? `依据你最近的「${m.e} ${m.n}」心情为你定制` : '完成一笔记录后，方案会更懂你'}</div>
@@ -454,7 +521,8 @@ function renderCare() {
     <h2>💌 今日自我关怀小事</h2>
     <div class="tip" id="tip">${TIPS[Math.floor(Math.random() * TIPS.length)]}</div>
     <button class="ghost" id="tipBtn">换一个 🔄</button>
-  </div>`;
+  </div>
+  <p class="disclaimer">🧡 心晴用于日常情绪觉察与自我关怀，不替代专业心理服务。若低落情绪持续两周以上，请及时寻求专业帮助（全国心理援助热线 12356）。</p>`;
 }
 
 function startBreath() {
@@ -499,16 +567,124 @@ function startBreath() {
 
 function stopBreath() { if (bTimer) { clearInterval(bTimer); bTimer = null; } }
 
+function noiseBuffer(ctx, seconds, kind) {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  if (kind === 'white') {
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  } else if (kind === 'pink') {
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + w * 0.0555179;
+      b1 = 0.99332 * b1 + w * 0.0750759;
+      b2 = 0.96900 * b2 + w * 0.1538520;
+      b3 = 0.86650 * b3 + w * 0.3104856;
+      b4 = 0.55000 * b4 + w * 0.5329522;
+      b5 = -0.7616 * b5 - w * 0.0168980;
+      d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11;
+      b6 = w * 0.115926;
+    }
+  } else {
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      last = (last + 0.02 * w) / 1.02;
+      d[i] = Math.max(-0.95, Math.min(0.95, last * 3.5));
+    }
+  }
+  return buf;
+}
+
+function wavesBuffer(ctx, seconds) {
+  const len = Math.floor(ctx.sampleRate * seconds);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  const frac = x => x - Math.floor(x);
+  const hash = n => frac(Math.sin(n * 127.1) * 43758.5453);
+  const P = 12;
+  let brown = 0, prev = 0;
+  for (let i = 0; i < len; i++) {
+    const t = i / ctx.sampleRate;
+    const w = Math.random() * 2 - 1;
+    brown = (brown + 0.02 * w) / 1.02;
+    const foam = (w - prev) * 0.35;
+    prev = w;
+    const wi = Math.floor(t / P);
+    const p = (t % P) / P;
+    const env = Math.pow(p, 0.35) * Math.exp(-3.2 * p) * (0.7 + 0.6 * hash(wi));
+    d[i] = Math.max(-0.95, Math.min(0.95, (brown * 3.2 * 0.75 + foam * 0.5) * env));
+  }
+  return buf;
+}
+
 function stopNoise() {
-  if (!noiseNodes) { currentNoise = null; return; }
-  const { src, master, lfo } = noiseNodes;
-  try {
-    master.gain.cancelScheduledValues(audioCtx.currentTime);
-    master.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.25);
-    setTimeout(() => { try { src.stop(); if (lfo) lfo.stop(); } catch (e) {} }, 320);
-  } catch (e) {}
-  noiseNodes = null;
+  if (noiseNodes) {
+    const { srcs, master } = noiseNodes;
+    noiseNodes = null;
+    try {
+      master.gain.cancelScheduledValues(audioCtx.currentTime);
+      master.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.25);
+      setTimeout(() => { srcs.forEach(s => { try { s.stop(); } catch (e) {} }); }, 320);
+    } catch (e) {}
+  }
+  clearTimeout(windTimer); windTimer = null;
   currentNoise = null;
+}
+
+function rainBuffer(ctx, seconds) {
+  const sr = ctx.sampleRate;
+  const len = Math.floor(sr * seconds);
+  const buf = ctx.createBuffer(1, len, sr);
+  const d = buf.getChannelData(0);
+
+  let hiss = 0;
+  const aHiss = 2 * Math.PI * 6000 / sr;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    hiss += aHiss * (w - hiss);
+    d[i] = hiss * 0.22;
+  }
+
+  let rumble = 0;
+  for (let i = 0; i < len; i++) {
+    const w = Math.random() * 2 - 1;
+    rumble = (rumble + 0.02 * w) / 1.02;
+    d[i] += rumble * 3.5 * 0.25;
+  }
+
+  const nDrops = Math.floor(seconds * (52 + Math.random() * 14));
+  const atkSamples = Math.max(1, Math.floor(sr * 0.001));
+  for (let n = 0; n < nDrops; n++) {
+    const dur = 0.004 + Math.random() * 0.011;
+    const ns = Math.max(2, Math.floor(dur * sr));
+    const pos = Math.floor(Math.random() * (len - ns - 1));
+    const big = Math.random() < 0.3;
+    const fc = big ? 1200 + Math.random() * 1800 : 3000 + Math.random() * 3000;
+    const amp = big ? 0.35 + Math.random() * 0.2 : 0.15 + Math.random() * 0.2;
+    const a = 2 * Math.PI * fc / sr;
+    let lp = 0;
+    for (let i = 0; i < ns; i++) {
+      const w = Math.random() * 2 - 1;
+      lp += a * (w - lp);
+      let s = w - lp;
+      if (i < atkSamples) s *= i / atkSamples;
+      d[pos + i] += s * Math.exp(-3.2 * i / ns) * amp;
+    }
+  }
+
+  for (let i = 0; i < len; i++) {
+    d[i] *= 0.9 + 0.1 * Math.sin(4 * Math.PI * i / len + 0.7);
+  }
+
+  let mx = 0;
+  for (let i = 0; i < len; i++) { const v = Math.abs(d[i]); if (v > mx) mx = v; }
+  if (mx > 0) {
+    const g = 0.88 / mx;
+    for (let i = 0; i < len; i++) d[i] *= g;
+  }
+  return buf;
 }
 
 function playNoise(type) {
@@ -517,40 +693,67 @@ function playNoise(type) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
     const ctx = audioCtx;
-    const len = ctx.sampleRate * 3;
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    const src = ctx.createBufferSource();
-    src.buffer = buf; src.loop = true;
-    const filter = ctx.createBiquadFilter();
-    const mod = ctx.createGain();
     const master = ctx.createGain();
     master.gain.value = 0;
-    let lfo = null;
+    master.connect(ctx.destination);
+    const srcs = [];
+    let vol = 0.8;
+
     if (type === 'rain') {
-      filter.type = 'lowpass'; filter.frequency.value = 1400; filter.Q.value = 0.5;
-      mod.gain.value = 0.16;
+      const src = ctx.createBufferSource();
+      src.buffer = rainBuffer(ctx, 12); src.loop = true;
+      const g = ctx.createGain(); g.gain.value = 1;
+      src.connect(g); g.connect(master);
+      src.start(); srcs.push(src);
+      vol = 0.7;
     } else if (type === 'waves') {
-      filter.type = 'lowpass'; filter.frequency.value = 500;
-      mod.gain.value = 0.1;
-      lfo = ctx.createOscillator();
-      const lg = ctx.createGain();
-      lfo.frequency.value = 0.12; lg.gain.value = 0.07;
-      lfo.connect(lg); lg.connect(mod.gain); lfo.start();
+      const src = ctx.createBufferSource();
+      src.buffer = wavesBuffer(ctx, 12); src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3400; lp.Q.value = 0.4;
+      const g = ctx.createGain(); g.gain.value = 1;
+      src.connect(lp); lp.connect(g); g.connect(master);
+      src.start(); srcs.push(src);
+      vol = 0.75;
     } else {
-      filter.type = 'bandpass'; filter.frequency.value = 350; filter.Q.value = 0.4;
-      mod.gain.value = 0.2;
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer(ctx, 5, 'brown'); src.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 400; bp.Q.value = 0.9;
+      const mod = ctx.createGain(); mod.gain.value = 0.9;
+      const lfo1 = ctx.createOscillator(); lfo1.frequency.value = 0.09;
+      const g1 = ctx.createGain(); g1.gain.value = 0.3;
+      const lfo2 = ctx.createOscillator(); lfo2.frequency.value = 0.047;
+      const g2 = ctx.createGain(); g2.gain.value = 0.25;
+      lfo1.connect(g1); g1.connect(mod.gain);
+      lfo2.connect(g2); g2.connect(mod.gain);
+      src.connect(bp); bp.connect(mod); mod.connect(master);
+      src.start(); lfo1.start(); lfo2.start();
+      srcs.push(src, lfo1, lfo2);
+      const gust = () => {
+        bp.frequency.setTargetAtTime(180 + Math.random() * 540, ctx.currentTime, 1.4);
+        windTimer = setTimeout(gust, 1500 + Math.random() * 1600);
+      };
+      gust();
+      vol = 0.6;
     }
-    src.connect(filter); filter.connect(mod); mod.connect(master); master.connect(ctx.destination);
-    src.start();
-    master.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.6);
-    noiseNodes = { src, master, lfo };
+
+    master.gain.setValueAtTime(0, ctx.currentTime);
+    master.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.8);
+    noiseNodes = { srcs, master };
     currentNoise = type;
   } catch (e) {
     currentNoise = null;
     toast('当前浏览器不支持音频播放');
   }
+}
+
+function exportData() {
+  const data = JSON.stringify({ app: 'moodcare', exportedAt: new Date().toISOString(), entries }, null, 2);
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = `heart-mood-backup-${dayKey(Date.now())}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 3000);
+  toast('已导出 JSON 备份 🗂️');
 }
 
 main.addEventListener('click', e => {
@@ -562,10 +765,12 @@ main.addEventListener('click', e => {
   if (tg) { const t = tg.dataset.trigger; form.triggers.includes(t) ? form.triggers = form.triggers.filter(x => x !== t) : form.triggers.push(t); tg.classList.toggle('on'); return; }
   if (e.target.id === 'saveBtn') {
     if (!form.mood) { toast('先选一个此刻的心情哦'); return; }
+    const savedMood = form.mood;
     entries.push({ id: Date.now(), ts: Date.now(), mood: form.mood, intensity: form.intensity, triggers: [...form.triggers], text: (form.text || '').trim() });
     save();
     form = { mood: 0, intensity: 5, triggers: [], text: '' };
-    toast('已保存，今晚也要记得回来看看 🌱');
+    toast(COMFORT[savedMood], 3600);
+    celebrate(e.clientX, e.clientY, moodOf(savedMood).e);
     renderDiary();
     return;
   }
@@ -595,6 +800,24 @@ main.addEventListener('click', e => {
   }
   if (e.target.id === 'bBtn') { startBreath(); return; }
   if (e.target.id === 'tipBtn') { document.getElementById('tip').textContent = TIPS[Math.floor(Math.random() * TIPS.length)]; return; }
+  const wd = e.target.closest('[data-word]');
+  if (wd) { cloudFilter = wd.dataset.word; renderInsights(); return; }
+  if (e.target.closest('[data-word-clear]')) { cloudFilter = null; renderInsights(); return; }
+  if (e.target.id === 'exportBtn') { exportData(); return; }
+  if (e.target.id === 'clearAllBtn') {
+    if (confirm('确定清空全部记录吗？此操作不可恢复，建议先导出备份。')) {
+      entries = []; save();
+      form = { mood: 0, intensity: 5, triggers: [], text: '' };
+      cloudFilter = null;
+      toast('已清空所有记录');
+if (location.protocol && location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
+  try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) {}
+}
+
+route();
+    }
+    return;
+  }
   const go = e.target.closest('[data-goto]');
   if (go) { location.hash = '/' + go.dataset.goto; return; }
 });
